@@ -1,3 +1,19 @@
 #lane_control/lane_controller_node
-
-## ADD CONFIGS HERE
+LanePose:
+  header: 
+    seq: 001
+    stamp: 
+      secs: 0000000001
+      nsecs: 000000001
+    frame_id: ''
+  d: -0.00
+  d_ref: 0.0
+  sigma_d: 0.0
+  phi: 0
+  phi_ref: 0.0
+  sigma_phi: 0.0
+  curvature: 0.0
+  curvature_ref: 0.0
+  v_ref: 0.0
+  status: 0
+  in_lane: True

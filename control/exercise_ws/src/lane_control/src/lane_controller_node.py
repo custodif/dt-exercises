@@ -58,10 +58,15 @@ class LaneControllerNode(DTROS):
 
         car_control_msg = Twist2DStamped()
         car_control_msg.header = self.pose_msg.header
+        
+        print(self.pose_msg)
 
-        # TODO This needs to get changed
-        car_control_msg.v = 0.5
-        car_control_msg.omega = 0
+        v, w = self.pp_controller.get_velocity(self.pose_msg)
+        
+        print(v, " ", w)
+
+        car_control_msg.v = v
+        car_control_msg.omega = w
 
         self.publishCmd(car_control_msg)
 
@@ -78,7 +83,7 @@ class LaneControllerNode(DTROS):
     def cbParametersChanged(self):
         """Updates parameters in the controller object."""
 
-        self.controller.update_parameters(self.params)
+        self.pp_controller.update_parameters(self.params)
 
 
 if __name__ == "__main__":
