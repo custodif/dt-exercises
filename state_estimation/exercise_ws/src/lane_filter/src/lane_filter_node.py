@@ -52,10 +52,10 @@ class LaneFilterNode(DTROS):
         # Create the filter
         self.filter = LaneFilterHistogramKF(**self._filter)
         self.t_last_update = rospy.get_time()
-        self.last_update_stamp = self.t_last_update
+
+        self.last_update_stamp = rospy.Time.from_sec(self.t_last_update)
 
         self.filter.wheel_radius = rospy.get_param(f"/{veh}/kinematics_node/radius")
-        self.filter.baseline = rospy.get_param(f"/{veh}/kinematics_node/baseline")
 
         # Subscribers
         self.sub_segment_list = rospy.Subscriber("~segment_list",
@@ -72,11 +72,6 @@ class LaneFilterNode(DTROS):
                                                  WheelEncoderStamped,
                                                  self.cbProcessRightEncoder,
                                                  queue_size=1)
-
-        self.sub_episode_start = rospy.Subscriber(f"episode_start",
-                                                  BoolStamped,
-                                                  self.cbEpisodeStart,
-                                                  queue_size=1)
 
 
         # Publishers
@@ -104,11 +99,6 @@ class LaneFilterNode(DTROS):
 
         self.bridge = CvBridge()
 
-    def cbEpisodeStart(self, msg):
-        rospy.loginfo("Lane Filter Resetting")
-        if msg.data:
-            self.filter.reset()
-
     def cbProcessLeftEncoder(self, left_encoder_msg):
         if not self.filter.initialized:
             self.filter.encoder_resolution = left_encoder_msg.resolution
@@ -125,6 +115,7 @@ class LaneFilterNode(DTROS):
         current_time = rospy.get_time()
         dt = current_time - self.t_last_update
         self.t_last_update = current_time
+        self.last_update_stamp = rospy.Time.from_sec(self.t_last_update)
 
         # first let's check if we moved at all, if not abort
         if self.right_encoder_ticks_delta == 0 and self.left_encoder_ticks_delta == 0:
@@ -137,7 +128,6 @@ class LaneFilterNode(DTROS):
         self.right_encoder_ticks_delta = 0
 
         self.publishEstimate()
-
 
     def cbProcessSegments(self, segment_list_msg):
         """Callback to process the segments

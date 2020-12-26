@@ -6,7 +6,6 @@ from scipy.ndimage.filters import gaussian_filter
 from math import floor, sqrt
 
 
-
 class LaneFilterHistogramKF():
     """ Generates an estimate of the lane pose.
 
@@ -40,6 +39,8 @@ class LaneFilterHistogramKF():
             'range_min',
             'range_est',
             'range_max',
+            'weight_max',
+            'weight_min',
         ]
 
         for p_name in param_names:
@@ -47,11 +48,10 @@ class LaneFilterHistogramKF():
             setattr(self, p_name, kwargs[p_name])
 
 
-
-        self.encoder_resolution = 0
-        self.wheel_radius = 0.0
+        self.encoder_resolution = 135
+        self.wheel_radius = 0.0325
         self.baseline = 0.0
-        self.initialized = False
+        self.initialized = True
         self.reset()
 
     def reset(self):
@@ -61,21 +61,120 @@ class LaneFilterHistogramKF():
 
     def predict(self, dt, left_encoder_delta, right_encoder_delta):
         #TODO update self.belief based on right and left encoder data + kinematics
+
         if not self.initialized:
             return
+        
+        self.encoder_resolution = 135
+        self.wheel_radius = 0.0325
+        wheel_dist = 0.1
+        wheel_radius = self.wheel_radius
+
+        l = wheel_dist
+        
+        Vl = left_encoder_delta * 2. * np.pi * wheel_radius / (self.encoder_resolution * dt)
+        Vr = right_encoder_delta * 2. * np.pi * wheel_radius / (self.encoder_resolution * dt)
+
+
+        if Vl == Vr:
+            v = Vl = Vr
+            theta_displacement = 0
+            d_dtheta = dt * v * np.cos(self.belief['mean'][1])
+
+        else:
+            w = (Vr - Vl) / l
+            v = (Vr + Vl) / 2. 
+            d = v / w 
+            theta_displacement = w * dt 
+
+            c1 = d * np.cos(theta_displacement)
+            c2 = d * np.sin(theta_displacement)
+
+            d_dtheta = np.sin(self.belief['mean'][1])*(c1 - d) + np.cos(self.belief['mean'][1])*c2      
+            
+        F = np.array([[1, -d_dtheta], [0, 1]])
+
+        B = np.array([[0], [1]])
+        u = np.array([theta_displacement])
+
+        Q = np.array([[0.2, 0], [0, 0.2]])
+
+        self.belief['mean'] = (F @ self.belief['mean'] + B @ u).tolist()        
+        self.belief['covariance'] = (F @ self.belief['covariance'] @ F.T + Q).tolist()
 
     def update(self, segments):
         # prepare the segments for each belief array
         segmentsArray = self.prepareSegments(segments)
         # generate all belief arrays
 
-        measurement_likelihood = self.generate_measurement_likelihood(
-            segmentsArray)
+        measurement_likelihood = self.generate_measurement_likelihood(segmentsArray)
+
+        if measurement_likelihood is not None:
 
         # TODO: Parameterize the measurement likelihood as a Gaussian
 
+            bin_d = np.arange(self.d_min+self.delta_d/2, self.d_max+self.delta_d/2, self.delta_d)
+            mea_likelihood_d = np.sum(measurement_likelihood, axis=1)
+
+            pos_d_ini = 0
+            pos_d_fin = len(bin_d)   
+
+            values = np.array(bin_d[pos_d_ini:pos_d_fin])
+            weights = np.array(mea_likelihood_d[pos_d_ini:pos_d_fin]/np.sum(mea_likelihood_d[pos_d_ini:pos_d_fin]))
+
+            mu_d = 0
+            std_d = 0
+
+            mu_d = np.average(values, weights=weights)
+            std_d = np.average((values-mu_d)**2, weights=weights)
+
+            if std_d < 0.001:
+                std_d =  0.001
+
+            bin_phi = np.arange(self.phi_min+self.delta_phi/2, self.phi_max+self.delta_phi/2, self.delta_phi)
+            mea_likelihood_phi = np.sum(measurement_likelihood, axis=0)
+
+            pos_phi_ini = 0
+            pos_phi_fin = len(bin_phi)   
+
+            values = np.array(bin_phi[pos_phi_ini:pos_phi_fin])
+            weights = np.array(mea_likelihood_phi[pos_phi_ini:pos_phi_fin]/np.sum(mea_likelihood_phi[pos_phi_ini:pos_phi_fin]))
+
+            mu_phi = 0
+            std_phi = 0
+
+            mu_phi = np.average(values, weights=weights)
+            std_phi = np.average((values-mu_phi)**2, weights=weights)
+
+            if std_phi < 0.001:
+                std_phi =  0.001
+        else:
+            mu_d = self.belief['mean'][0]
+            mu_phi = self.belief['mean'][1]
+            std_d =  0.2
+            std_phi =  0.2
+
+
         # TODO: Apply the update equations for the Kalman Filter to self.belief
 
+        H = np.array([[1, 0], [0, 1]])
+        R = np.array([[std_d, 0], [0, std_phi]])
+
+        predicted_mu = np.array(self.belief['mean'])
+
+        predicted_Sigma = np.array(self.belief['covariance'])
+
+        z = np.array([mu_d + np.random.normal(loc=0.0, scale=std_d),
+                      mu_phi + np.random.normal(loc=0.0, scale=std_phi)])
+
+        residual_mean = z - H @ predicted_mu
+
+        residual_covariance = H @ predicted_Sigma @ H.T + R 
+
+        kalman_gain = predicted_Sigma @ H.T @ np.linalg.inv(residual_covariance)
+
+        self.belief['mean'] = (predicted_mu + kalman_gain @ residual_mean).tolist()
+        self.belief['covariance'] = (predicted_Sigma - kalman_gain @ H @ predicted_Sigma).tolist()
 
     def getEstimate(self):
         return self.belief
@@ -100,7 +199,7 @@ class LaneFilterHistogramKF():
 
             i = int(floor((d_i - self.d_min) / self.delta_d))
             j = int(floor((phi_i - self.phi_min) / self.delta_phi))
-            measurement_likelihood[i, j] = measurement_likelihood[i, j] + 1
+            measurement_likelihood[i, j] = measurement_likelihood[i, j] + weight
 
         if np.linalg.norm(measurement_likelihood) == 0:
             return None
@@ -109,6 +208,7 @@ class LaneFilterHistogramKF():
 
         measurement_likelihood = measurement_likelihood / \
             np.sum(measurement_likelihood)
+
         return measurement_likelihood
 
 
@@ -134,6 +234,9 @@ class LaneFilterHistogramKF():
         l_i = (l1 + l2) / 2
         d_i = (d1 + d2) / 2
         phi_i = np.arcsin(t_hat[1])
+
+        weight = self.weight_min
+
         if segment.color == segment.WHITE:  # right lane is white
             if(p1[0] > p2[0]):  # right edge of white lane
                 d_i = d_i - self.linewidth_white
